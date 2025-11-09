@@ -7,7 +7,56 @@ import { useRouter } from 'next/router';
 function AdminLayout({ children, activeTab }) {
   const [user, setUser] = useState(null);
   const router = useRouter();
+// Add real-time subscriptions for each user's data
+useEffect(() => {
+  if (!users.length) return;
 
+  // Subscribe to wallet changes for all users
+  const walletSubscription = supabase
+    .channel('admin-wallet-updates')
+    .on(
+      'postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
+        table: 'wallets',
+        filter: `user_id=in.(${users.map(u => `"${u.user_id}"`).join(',')})`
+      },
+      (payload) => {
+        console.log('🔄 Wallet update:', payload);
+        // Update specific user's wallet data
+        setUsers(prev => prev.map(user => 
+          user.user_id === payload.new.user_id 
+            ? { ...user, wallet_balance: payload.new.balance }
+            : user
+        ));
+      }
+    )
+    .subscribe();
+
+  // Subscribe to booking changes
+  const bookingSubscription = supabase
+    .channel('admin-booking-updates')
+    .on(
+      'postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
+        table: 'bookings',
+        filter: `user_id=in.(${users.map(u => `"${u.user_id}"`).join(',')})`
+      },
+      (payload) => {
+        console.log('🔄 Booking update:', payload);
+        fetchUsersData(); // Refresh user data
+      }
+    )
+    .subscribe();
+
+  return () => {
+    walletSubscription.unsubscribe();
+    bookingSubscription.unsubscribe();
+  };
+}, [users]);
   useEffect(() => {
     const userData = localStorage.getItem('user');
     if (userData) {
@@ -1007,4 +1056,5 @@ export default function AdminUsersPage() {
       />
     </AdminLayout>
   );
+
 }
