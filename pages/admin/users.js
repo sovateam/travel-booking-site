@@ -12,7 +12,28 @@ export default function AdminUsersPage() {
     fetchUsersData();
     setupRealtimeSubscriptions();
   }, []);
+useEffect(() => {
+  // Real-time subscription for user updates
+  const userSubscription = supabase
+    .channel('admin-users-realtime')
+    .on(
+      'postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
+        table: 'users'
+      },
+      (payload) => {
+        console.log('🔄 User real-time update:', payload);
+        fetchUsersData(); // Refresh data
+      }
+    )
+    .subscribe();
 
+  return () => {
+    userSubscription.unsubscribe();
+  };
+}, []);
   const fetchUsersData = async () => {
     try {
       setLoading(true);
@@ -345,3 +366,4 @@ export default function AdminUsersPage() {
     </AdminLayout>
   );
 }
+
