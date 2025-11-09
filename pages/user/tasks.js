@@ -27,49 +27,61 @@ export default function UserTasksPage() {
     }
   }, []);
 
-  const fetchUserTasks = async (userId) => {
-    try {
-      setLoading(true);
+const fetchUserTasks = async (userId) => {
+  try {
+    setLoading(true);
+    console.log('🔄 Fetching tasks for user:', userId);
 
-      // Fetch regular tasks
-      const { data: regularTasks, error: regularError } = await supabase
-        .from('user_tasks')
-        .select('*')
-        .eq('user_id', userId)
-        .order('set_number', { ascending: true })
-        .order('task_number', { ascending: true });
+    // Fetch REGULAR tasks
+    const { data: regularTasks, error: regularError } = await supabase
+      .from('user_tasks')
+      .select('*')
+      .eq('user_id', userId)
+      .order('set_number', { ascending: true })
+      .order('task_number', { ascending: true });
 
-      if (regularError) throw regularError;
-
-      // Fetch premium tasks assigned to this user
-      const { data: premiumTasksData, error: premiumError } = await supabase
-        .from('user_premium_tasks')
-        .select(`
-          *,
-          premium_config(
-            description,
-            instructions,
-            requirements,
-            task_type,
-            difficulty
-          )
-        `)
-        .eq('user_id', userId)
-        .in('status', ['assigned', 'in_progress'])
-        .order('assigned_at', { ascending: true });
-
-      if (premiumError) throw premiumError;
-
-      setTasks(regularTasks || []);
-      setPremiumTasks(premiumTasksData || []);
-
-    } catch (error) {
-      console.error('Error fetching tasks:', error);
-      alert('Error loading tasks: ' + error.message);
-    } finally {
-      setLoading(false);
+    if (regularError) {
+      console.error('❌ Regular tasks error:', regularError);
+      throw regularError;
     }
-  };
+
+    // Fetch PREMIUM tasks assigned to this user
+    const { data: premiumTasks, error: premiumError } = await supabase
+      .from('user_premium_tasks')
+      .select(`
+        *,
+        premium_config (
+          description,
+          instructions,
+          requirements,
+          task_type,
+          difficulty,
+          reward_amount
+        )
+      `)
+      .eq('user_id', userId)
+      .in('status', ['assigned', 'in_progress', 'completed'])
+      .order('assigned_at', { ascending: false });
+
+    if (premiumError) {
+      console.error('❌ Premium tasks error:', premiumError);
+      throw premiumError;
+    }
+
+    console.log('✅ Regular tasks:', regularTasks?.length);
+    console.log('✅ Premium tasks:', premiumTasks?.length);
+    console.log('📋 All premium tasks data:', premiumTasks);
+
+    setTasks(regularTasks || []);
+    setPremiumTasks(premiumTasks || []);
+
+  } catch (error) {
+    console.error('💥 Error fetching tasks:', error);
+    alert('Error loading tasks: ' + error.message);
+  } finally {
+    setLoading(false);
+  }
+};
 
   const handleStartTask = async (taskId, isPremium = false) => {
     try {
@@ -696,4 +708,5 @@ export default function UserTasksPage() {
       )}
     </div>
   );
+
 }
