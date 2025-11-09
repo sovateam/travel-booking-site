@@ -3,7 +3,7 @@ import { useState, useEffect } from 'react';
 import { supabase } from '../../lib/supabase';
 import { useRouter } from 'next/router';
 
-// Admin Layout Component
+// Admin Layout Component (keep your existing one)
 function AdminLayout({ children, activeTab }) {
   const [user, setUser] = useState(null);
   const router = useRouter();
@@ -188,7 +188,7 @@ function AdminLayout({ children, activeTab }) {
   );
 }
 
-// Create Premium Task Modal
+// Create Premium Task Modal (keep your existing one)
 function CreatePremiumTaskModal({ isOpen, onClose, onCreate }) {
   const [formData, setFormData] = useState({
     set_number: 1,
@@ -356,6 +356,7 @@ function CreatePremiumTaskModal({ isOpen, onClose, onCreate }) {
               </div>
             </div>
 
+            {/* Rest of your existing create modal form */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
               <div>
                 <label style={{ display: 'block', fontSize: '14px', fontWeight: '500', color: '#374151', marginBottom: '6px' }}>
@@ -612,7 +613,7 @@ function CreatePremiumTaskModal({ isOpen, onClose, onCreate }) {
   );
 }
 
-// Assign Premium Task Modal
+// Assign Premium Task Modal - ENHANCED WITH SYNC FIXES
 function AssignPremiumTaskModal({ isOpen, onClose, onAssign, premiumTasks, users }) {
   const [formData, setFormData] = useState({
     user_id: '',
@@ -622,6 +623,7 @@ function AssignPremiumTaskModal({ isOpen, onClose, onAssign, premiumTasks, users
   });
   const [loading, setLoading] = useState(false);
   const [selectedTask, setSelectedTask] = useState(null);
+  const [selectedUser, setSelectedUser] = useState(null);
 
   useEffect(() => {
     if (formData.premium_task_id) {
@@ -632,17 +634,76 @@ function AssignPremiumTaskModal({ isOpen, onClose, onAssign, premiumTasks, users
     }
   }, [formData.premium_task_id, premiumTasks]);
 
+  useEffect(() => {
+    if (formData.user_id) {
+      const user = users.find(u => u.user_id === formData.user_id);
+      setSelectedUser(user);
+    } else {
+      setSelectedUser(null);
+    }
+  }, [formData.user_id, users]);
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
 
     try {
+      if (!formData.user_id || !formData.premium_task_id) {
+        throw new Error('Please select both user and premium task');
+      }
+
+      // Get the selected premium task details
+      const selectedTask = premiumTasks.find(task => task.id === formData.premium_task_id);
       if (!selectedTask) {
         throw new Error('Selected premium task not found');
       }
 
-      // Create user premium task assignment
-      const { error } = await supabase
+      // Check if user already has this premium task
+      const { data: existingAssignment } = await supabase
+        .from('user_premium_tasks')
+        .select('id')
+        .eq('user_id', formData.user_id)
+        .eq('premium_task_id', formData.premium_task_id)
+        .in('status', ['assigned', 'in_progress'])
+        .single();
+
+      if (existingAssignment) {
+        throw new Error('This user already has this premium task assigned');
+      }
+
+      // Get user's current progress to validate assignment
+      const { data: userData } = await supabase
+        .from('users')
+        .select('current_set, current_task, name')
+        .eq('user_id', formData.user_id)
+        .single();
+
+      if (!userData) {
+        throw new Error('User data not found');
+      }
+
+      // Validate that the assigned task is not too far ahead of user's current position
+      if (selectedTask.set_number > userData.current_set) {
+        throw new Error(`Cannot assign Set ${selectedTask.set_number} task to user who is only on Set ${userData.current_set}`);
+      }
+
+      if (selectedTask.set_number === userData.current_set && selectedTask.task_number > userData.current_task + 2) {
+        if (!confirm(`User is currently on Task ${userData.current_task}. Assigning Task ${selectedTask.task_number} which is far ahead. Continue?`)) {
+          return;
+        }
+      }
+
+      console.log('🎯 Assigning premium task:', {
+        user: formData.user_id,
+        task: selectedTask.id,
+        position: `Set ${selectedTask.set_number} - Task ${selectedTask.task_number}`
+      });
+
+      // Get admin user info
+      const adminUser = JSON.parse(localStorage.getItem('user'));
+
+      // Create user premium task assignment with ALL required data
+      const { data: assignment, error } = await supabase
         .from('user_premium_tasks')
         .insert([{
           user_id: formData.user_id,
@@ -662,22 +723,43 @@ function AssignPremiumTaskModal({ isOpen, onClose, onAssign, premiumTasks, users
           priority: formData.priority,
           admin_notes: formData.notes,
           status: 'assigned',
-          assigned_at: new Date().toISOString()
-        }]);
+          assigned_at: new Date().toISOString(),
+          assigned_by: adminUser?.user_id // Track which admin assigned this
+        }])
+        .select()
+        .single();
 
       if (error) throw error;
+
+      console.log('✅ Premium task assigned successfully:', assignment);
+
+      // Send real-time notification to user
+      await supabase
+        .from('notifications')
+        .insert([{
+          user_id: formData.user_id,
+          title: 'New Premium Task Assigned',
+          message: `You have a new premium task: ${selectedTask.description} (Set ${selectedTask.set_number}, Task ${selectedTask.task_number})`,
+          type: 'premium_task_assigned',
+          related_id: assignment.id,
+          read: false
+        }]);
+
+      alert('🎯 Premium task assigned successfully! User will see it when they reach the correct position.');
       
-      alert('Premium task assigned successfully!');
-      onAssign();
-      onClose();
+      onAssign(); // Refresh data
+      onClose(); // Close modal
+      
+      // Reset form
       setFormData({
         user_id: '',
         premium_task_id: '',
         priority: 'normal',
         notes: ''
       });
+
     } catch (error) {
-      console.error('Error assigning premium task:', error);
+      console.error('❌ Error assigning premium task:', error);
       alert('Error assigning premium task: ' + error.message);
     } finally {
       setLoading(false);
@@ -757,7 +839,7 @@ function AssignPremiumTaskModal({ isOpen, onClose, onAssign, premiumTasks, users
                   <option value="">Choose a user...</option>
                   {users.filter(user => user.status === 'approved').map(user => (
                     <option key={user.user_id} value={user.user_id}>
-                      {user.name} ({user.user_id}) - Set {user.current_set || 1}
+                      {user.name} (Set {user.current_set || 1}, Task {user.current_task || 1})
                     </option>
                   ))}
                 </select>
@@ -811,6 +893,20 @@ function AssignPremiumTaskModal({ isOpen, onClose, onAssign, premiumTasks, users
               </select>
             </div>
 
+            {/* User Progress Info */}
+            {selectedUser && (
+              <div style={{
+                padding: '12px',
+                backgroundColor: '#f0f9ff',
+                borderRadius: '6px',
+                border: '1px solid #e0f2fe'
+              }}>
+                <p style={{ fontSize: '13px', color: '#0369a1', margin: 0, fontWeight: '500' }}>
+                  👤 {selectedUser.name} - Current Position: Set {selectedUser.current_set || 1}, Task {selectedUser.current_task || 1}
+                </p>
+              </div>
+            )}
+
             {selectedTask && (
               <div style={{
                 padding: '16px',
@@ -822,6 +918,12 @@ function AssignPremiumTaskModal({ isOpen, onClose, onAssign, premiumTasks, users
                   Task Details
                 </h4>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', fontSize: '13px' }}>
+                  <div>
+                    <span style={{ color: '#64748b' }}>Position:</span> 
+                    <span style={{ color: '#1e293b', fontWeight: '500', marginLeft: '8px' }}>
+                      Set {selectedTask.set_number} - Task {selectedTask.task_number}
+                    </span>
+                  </div>
                   <div>
                     <span style={{ color: '#64748b' }}>Type:</span> 
                     <span style={{ color: '#1e293b', fontWeight: '500', marginLeft: '8px' }}>
@@ -857,12 +959,6 @@ function AssignPremiumTaskModal({ isOpen, onClose, onAssign, premiumTasks, users
                     <span style={{ color: '#64748b' }}>Time Limit:</span> 
                     <span style={{ color: '#1e293b', fontWeight: '500', marginLeft: '8px' }}>
                       {selectedTask.completion_time_limit}h
-                    </span>
-                  </div>
-                  <div>
-                    <span style={{ color: '#64748b' }}>Max Attempts:</span> 
-                    <span style={{ color: '#1e293b', fontWeight: '500', marginLeft: '8px' }}>
-                      {selectedTask.max_attempts}
                     </span>
                   </div>
                 </div>
@@ -937,7 +1033,7 @@ function AssignPremiumTaskModal({ isOpen, onClose, onAssign, premiumTasks, users
   );
 }
 
-// Edit Premium Task Modal
+// Edit Premium Task Modal (keep your existing one)
 function EditPremiumTaskModal({ isOpen, onClose, onUpdate, task }) {
   const [formData, setFormData] = useState({});
   const [loading, setLoading] = useState(false);
@@ -1050,7 +1146,7 @@ function EditPremiumTaskModal({ isOpen, onClose, onUpdate, task }) {
           </button>
         </div>
 
-        {/* Form */}
+        {/* Form - Similar to create modal but with current values */}
         <form onSubmit={handleSubmit} style={{ padding: '24px' }}>
           <div style={{ display: 'grid', gap: '16px' }}>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
@@ -1099,6 +1195,7 @@ function EditPremiumTaskModal({ isOpen, onClose, onUpdate, task }) {
               </div>
             </div>
 
+            {/* Rest of your edit form (same structure as create modal) */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
               <div>
                 <label style={{ display: 'block', fontSize: '14px', fontWeight: '500', color: '#374151', marginBottom: '6px' }}>
@@ -1364,7 +1461,7 @@ function EditPremiumTaskModal({ isOpen, onClose, onUpdate, task }) {
   );
 }
 
-// Main Premium Tasks Component
+// Main Premium Tasks Component - ENHANCED WITH REAL-TIME SYNC
 export default function AdminPremiumTasksPage() {
   const [premiumTasks, setPremiumTasks] = useState([]);
   const [userAssignments, setUserAssignments] = useState([]);
@@ -1385,11 +1482,13 @@ export default function AdminPremiumTasksPage() {
 
   useEffect(() => {
     fetchData();
+    setupRealtimeSubscriptions();
   }, []);
 
   const fetchData = async () => {
     try {
       setLoading(true);
+      console.log('🔄 Fetching premium tasks data...');
 
       // Fetch premium task configurations
       const { data: tasks, error: tasksError } = await supabase
@@ -1399,36 +1498,106 @@ export default function AdminPremiumTasksPage() {
         .order('task_number', { ascending: true });
 
       if (tasksError) throw tasksError;
-      setPremiumTasks(tasks || []);
 
       // Fetch user assignments with related data
       const { data: assignments, error: assignmentsError } = await supabase
         .from('user_premium_tasks')
         .select(`
           *,
-          users(name, user_id, current_set),
+          users(name, user_id, current_set, current_task),
           premium_config(set_number, task_number, penalty_amount, reward_amount, task_type, difficulty)
         `)
         .order('assigned_at', { ascending: false });
 
       if (assignmentsError) throw assignmentsError;
-      setUserAssignments(assignments || []);
 
       // Fetch users for assignment
       const { data: usersData, error: usersError } = await supabase
         .from('users')
-        .select('user_id, name, current_set, status, total_earnings')
+        .select('user_id, name, current_set, current_task, status, total_earnings')
         .eq('status', 'approved')
         .order('name', { ascending: true });
 
       if (usersError) throw usersError;
+
+      setPremiumTasks(tasks || []);
+      setUserAssignments(assignments || []);
       setUsers(usersData || []);
 
+      console.log('✅ Data fetched:', {
+        premiumTasks: tasks?.length,
+        assignments: assignments?.length,
+        users: usersData?.length
+      });
+
     } catch (error) {
-      console.error('Error fetching premium tasks data:', error);
+      console.error('❌ Error fetching premium tasks data:', error);
+      alert('Error loading data: ' + error.message);
     } finally {
       setLoading(false);
     }
+  };
+
+  const setupRealtimeSubscriptions = () => {
+    console.log('🔔 Setting up admin premium tasks real-time subscriptions');
+
+    // Real-time subscription for premium config changes
+    const configSubscription = supabase
+      .channel('admin-premium-config')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'premium_config'
+        },
+        (payload) => {
+          console.log('🔄 Premium config real-time update:', payload);
+          fetchData(); // Refresh data
+        }
+      )
+      .subscribe();
+
+    // Real-time subscription for assignment updates
+    const assignmentSubscription = supabase
+      .channel('admin-premium-assignments')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'user_premium_tasks'
+        },
+        (payload) => {
+          console.log('🔄 Premium assignment real-time update:', payload);
+          fetchData(); // Refresh admin data
+        }
+      )
+      .subscribe();
+
+    // Real-time subscription for user progress updates
+    const userProgressSubscription = supabase
+      .channel('admin-user-progress')
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'users'
+        },
+        (payload) => {
+          console.log('📈 User progress update in admin:', payload);
+          // If a user progresses, refresh assignments to show/hide tasks accordingly
+          fetchData();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      configSubscription.unsubscribe();
+      assignmentSubscription.unsubscribe();
+      userProgressSubscription.unsubscribe();
+    };
   };
 
   const handleToggleTask = async (taskId, isActive) => {
@@ -1600,20 +1769,20 @@ export default function AdminPremiumTasksPage() {
           display: 'flex',
           justifyContent: 'center',
           alignItems: 'center',
-          minHeight: '400px'
+          minHeight: '400px',
+          flexDirection: 'column',
+          gap: '16px'
         }}>
-          <div style={{ textAlign: 'center' }}>
-            <div style={{
-              width: '48px',
-              height: '48px',
-              border: '3px solid #f59e0b',
-              borderTop: '3px solid transparent',
-              borderRadius: '50%',
-              animation: 'spin 1s linear infinite',
-              margin: '0 auto 16px'
-            }}></div>
-            <p style={{ color: '#64748b', fontSize: '16px' }}>Loading premium tasks...</p>
-          </div>
+          <div style={{
+            width: '48px',
+            height: '48px',
+            border: '3px solid #f59e0b',
+            borderTop: '3px solid transparent',
+            borderRadius: '50%',
+            animation: 'spin 1s linear infinite',
+            margin: '0 auto 16px'
+          }}></div>
+          <p style={{ color: '#64748b', fontSize: '16px' }}>Loading premium tasks...</p>
           <style jsx>{`
             @keyframes spin {
               to { transform: rotate(360deg); }
@@ -1629,21 +1798,43 @@ export default function AdminPremiumTasksPage() {
       <div style={{ padding: '30px' }}>
         {/* Header */}
         <div style={{ marginBottom: '32px' }}>
-          <h1 style={{
-            fontSize: '32px',
-            fontWeight: 'bold',
-            color: '#1e293b',
-            margin: '0 0 8px 0'
-          }}>
-            Premium Tasks Management
-          </h1>
-          <p style={{
-            fontSize: '16px',
-            color: '#64748b',
-            margin: 0
-          }}>
-            Configure premium tasks and assign them to specific users with advanced options.
-          </p>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+            <div>
+              <h1 style={{
+                fontSize: '32px',
+                fontWeight: 'bold',
+                color: '#1e293b',
+                margin: '0 0 8px 0'
+              }}>
+                Premium Tasks Management
+              </h1>
+              <p style={{
+                fontSize: '16px',
+                color: '#64748b',
+                margin: 0
+              }}>
+                Configure premium tasks and assign them to users with real-time sync.
+              </p>
+            </div>
+            <button
+              onClick={fetchData}
+              style={{
+                padding: '10px 16px',
+                backgroundColor: '#3b82f6',
+                color: 'white',
+                border: 'none',
+                borderRadius: '6px',
+                fontSize: '14px',
+                fontWeight: '500',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px'
+              }}
+            >
+              🔄 Refresh
+            </button>
+          </div>
         </div>
 
         {/* Stats Cards */}
@@ -1917,24 +2108,6 @@ export default function AdminPremiumTasksPage() {
             }}
           >
             🎯 Assign to User
-          </button>
-          <button
-            onClick={fetchData}
-            style={{
-              padding: '12px 20px',
-              backgroundColor: '#3b82f6',
-              color: 'white',
-              border: 'none',
-              borderRadius: '6px',
-              fontSize: '14px',
-              fontWeight: '500',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '8px'
-            }}
-          >
-            🔄 Refresh
           </button>
         </div>
 
@@ -2293,7 +2466,7 @@ export default function AdminPremiumTasksPage() {
                             color: '#64748b',
                             margin: '0 0 4px 0'
                           }}>
-                            ID: {assignment.user_id} • Set {assignment.users?.current_set || 1}
+                            ID: {assignment.user_id} • Set {assignment.users?.current_set || 1}, Task {assignment.users?.current_task || 1}
                           </p>
                           {assignment.priority && assignment.priority !== 'normal' && (
                             <span style={{
@@ -2609,96 +2782,24 @@ export default function AdminPremiumTasksPage() {
                   })}
                 </div>
               </div>
-
-              {/* Financial Summary */}
-              <div style={{
-                padding: '20px',
-                backgroundColor: '#f8fafc',
-                borderRadius: '8px',
-                border: '1px solid #e2e8f0'
-              }}>
-                <h4 style={{ fontSize: '16px', fontWeight: '600', color: '#1e293b', margin: '0 0 16px 0' }}>
-                  Financial Summary
-                </h4>
-                <div style={{ display: 'grid', gap: '12px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span style={{ fontSize: '14px', color: '#64748b' }}>Total Penalty Value:</span>
-                    <span style={{ fontSize: '14px', fontWeight: '600', color: '#dc2626' }}>
-                      {formatCurrency(premiumTasks.reduce((sum, task) => sum + task.penalty_amount, 0))}
-                    </span>
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span style={{ fontSize: '14px', color: '#64748b' }}>Total Pending Value:</span>
-                    <span style={{ fontSize: '14px', fontWeight: '600', color: '#f59e0b' }}>
-                      {formatCurrency(premiumTasks.reduce((sum, task) => sum + task.additional_pending, 0))}
-                    </span>
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span style={{ fontSize: '14px', color: '#64748b' }}>Total Reward Value:</span>
-                    <span style={{ fontSize: '14px', fontWeight: '600', color: '#10b981' }}>
-                      {formatCurrency(premiumTasks.reduce((sum, task) => sum + task.reward_amount, 0))}
-                    </span>
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span style={{ fontSize: '14px', color: '#64748b' }}>Completed Tasks Revenue:</span>
-                    <span style={{ fontSize: '14px', fontWeight: '600', color: '#1e293b' }}>
-                      {formatCurrency(
-                        userAssignments
-                          .filter(a => a.status === 'completed')
-                          .reduce((sum, assignment) => sum + assignment.penalty_amount, 0)
-                      )}
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Performance Metrics */}
-              <div style={{
-                padding: '20px',
-                backgroundColor: '#f8fafc',
-                borderRadius: '8px',
-                border: '1px solid #e2e8f0'
-              }}>
-                <h4 style={{ fontSize: '16px', fontWeight: '600', color: '#1e293b', margin: '0 0 16px 0' }}>
-                  Performance Metrics
-                </h4>
-                <div style={{ display: 'grid', gap: '12px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span style={{ fontSize: '14px', color: '#64748b' }}>Completion Rate:</span>
-                    <span style={{ fontSize: '14px', fontWeight: '600', color: '#10b981' }}>
-                      {userAssignments.length > 0 
-                        ? ((userAssignments.filter(a => a.status === 'completed').length / userAssignments.length) * 100).toFixed(1) + '%'
-                        : '0%'
-                      }
-                    </span>
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span style={{ fontSize: '14px', color: '#64748b' }}>Active Tasks:</span>
-                    <span style={{ fontSize: '14px', fontWeight: '600', color: '#f59e0b' }}>
-                      {premiumTasks.filter(t => t.is_active).length}
-                    </span>
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span style={{ fontSize: '14px', color: '#64748b' }}>Average Penalty:</span>
-                    <span style={{ fontSize: '14px', fontWeight: '600', color: '#dc2626' }}>
-                      {formatCurrency(
-                        premiumTasks.length > 0 
-                          ? premiumTasks.reduce((sum, task) => sum + task.penalty_amount, 0) / premiumTasks.length
-                          : 0
-                      )}
-                    </span>
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span style={{ fontSize: '14px', color: '#64748b' }}>Users with Tasks:</span>
-                    <span style={{ fontSize: '14px', fontWeight: '600', color: '#8b5cf6' }}>
-                      {new Set(userAssignments.map(a => a.user_id)).size}
-                    </span>
-                  </div>
-                </div>
-              </div>
             </div>
           </div>
         )}
+
+        {/* Debug Info */}
+        <div style={{
+          marginTop: '20px',
+          padding: '16px',
+          backgroundColor: '#f8fafc',
+          borderRadius: '8px',
+          fontSize: '12px',
+          color: '#64748b'
+        }}>
+          <strong>Real-time Status:</strong> Active • 
+          <strong> Total Tasks:</strong> {premiumTasks.length} • 
+          <strong> Active Assignments:</strong> {userAssignments.filter(a => a.status === 'assigned').length} • 
+          <strong> Last Updated:</strong> {new Date().toLocaleTimeString()}
+        </div>
       </div>
 
       {/* Modals */}
